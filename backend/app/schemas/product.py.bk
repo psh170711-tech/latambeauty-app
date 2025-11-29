@@ -1,0 +1,18 @@
+from pydantic import BaseModel
+from typing import List
+from app.schemas.review import ReviewResponse
+
+class ProductCreate(BaseModel):
+    name: str
+    brand: str
+    barcode: str
+
+class ProductResponse(BaseModel):
+    id: int
+    name: str
+    brand: str
+    barcode: str
+    reviews: List[ReviewResponse] = []
+
+    class Config:
+        orm_mode = True
