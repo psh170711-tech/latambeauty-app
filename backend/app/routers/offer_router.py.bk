@@ -1,0 +1,30 @@
+from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy.orm import Session
+from typing import List
+
+from app.db.session import get_db
+from app.models.offer import Offer
+from app.models.product import Product
+from app.schemas.offer_schema import OfferCreate, OfferResponse
+
+router = APIRouter()
+
+# 🟢 제품별 Offer 조회 API
+@router.get("/product/{product_id}", response_model=List[OfferResponse])
+def get_offers_by_product(product_id: int, db: Session = Depends(get_db)):
+    offers = db.query(Offer).filter(Offer.product_id == product_id).all()
+    return offers
+
+
+# 🔵 Offer 추가 API (크롤러가 호출하게 됨)
+@router.post("/", response_model=OfferResponse)
+def create_offer(offer_data: OfferCreate, db: Session = Depends(get_db)):
+    product = db.query(Product).filter(Product.id == offer_data.product_id).first()
+    if not product:
+        raise HTTPException(status_code=404, detail="Product not found")
+
+    new_offer = Offer(**offer_data.dict())
+    db.add(new_offer)
+    db.commit()
+    db.refresh(new_offer)
+    return new_offer

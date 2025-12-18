@@ -1,29 +1,50 @@
 from fastapi import FastAPI
-
-from app.db import Base, engine
-from app import models
-from app.routers.products import router as products_router
-from app.routers.reviews import router as reviews_router
 from fastapi.middleware.cors import CORSMiddleware
 
-app = FastAPI()
+# ============================
+# DB 연결 + Base import 필수!!
+# ============================
+from app.db.base import Base
+from app.db.session import engine
 
-# 헬스체크 엔드포인트
-@app.get("/health")
-def health():
-    return {"status": "ok"}
+# 🔥 사용되는 라우터
+from app.routers import product_router, offer_router, review_router
 
-# 라우터 등록
-app.include_router(products_router, prefix="/products", tags=["Products"])
-app.include_router(reviews_router, prefix="/reviews", tags=["Reviews"])
+app = FastAPI(
+    title="LatamBeauty API",
+    version="1.0.0"
+)
 
-# DB 테이블 자동 생성
-Base.metadata.create_all(bind=engine)
-
+# ============================================================
+# CORS 설정
+# ============================================================
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # 모든 도메인 허용 (개발 단계)
+    allow_origins=["*"],  
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# ============================================================
+# 🔥 DB 테이블 자동 생성
+# ============================================================
+@app.on_event("startup")
+def startup():
+    print("📌 Initializing database tables...")
+    Base.metadata.create_all(bind=engine)
+    print("📌 DB ready!")
+
+# ============================================================
+# 라우터 연결
+# ============================================================
+app.include_router(product_router.router)
+app.include_router(offer_router.router)
+app.include_router(review_router.router)
+
+# ============================================================
+# 기본 루트 엔드포인트
+# ============================================================
+@app.get("/")
+def root():
+    return {"message": "LatamBeauty API is running 🚀"}

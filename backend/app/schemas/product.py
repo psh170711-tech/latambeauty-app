@@ -1,29 +1,21 @@
 from pydantic import BaseModel
-from typing import List, Optional
-from datetime import datetime
-from app.schemas.review import ReviewResponse
+from typing import Optional, List
+from app.schemas.offer import OfferResponse
 
-class ProductCreate(BaseModel):
+class ProductBase(BaseModel):
     name: str
-    brand: str
-    barcode: str
-    ingredients: str
-    image_url: Optional[str] = None
+    brand: Optional[str] = None
+    barcode: Optional[str] = None
+    ingredients: Optional[str] = None
+    ingredient_score: Optional[float] = None
+    safety_rating: Optional[float] = None
+    risk_level: Optional[str] = None
     category: Optional[str] = None
+    image_url: Optional[str] = None
 
-class ProductResponse(BaseModel):
+class ProductResponse(ProductBase):
     id: int
-    name: str
-    brand: str
-    barcode: str
-    ingredients: str
-    image_url: Optional[str]
-    category: Optional[str]
-    rating_avg: float
-    rating_count: int
-    created_at: Optional[datetime]
-    updated_at: Optional[datetime]
-    reviews: List[ReviewResponse] = []
+    offers: List[OfferResponse] = []  # 가격 리스트
 
     class Config:
         orm_mode = True
