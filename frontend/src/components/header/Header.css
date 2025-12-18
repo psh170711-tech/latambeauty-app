@@ -1,0 +1,78 @@
+.header {
+  position: sticky;
+  top: 0;
+  z-index: 100;
+
+  background: linear-gradient(
+    to bottom,
+    rgba(0, 0, 0, 0.92),
+    rgba(0, 0, 0, 0.85)
+  );
+
+  /* 🔥 스크롤 전 기본 높이 */
+  padding: 14px 20px 18px;
+
+  transition: padding 0.35s ease;
+}
+
+/* 🔥 스크롤 후 → 헤더 자체를 얇게 */
+.header.scrolled {
+  padding: 8px 20px 8px;
+}
+
+/* 상단 */
+.header-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.logo {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: #fff;
+  font-weight: 700;
+}
+
+.logo .dot {
+  width: 8px;
+  height: 8px;
+  background: #4f7cff;
+  border-radius: 50%;
+}
+
+.header-right {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.lang {
+  background: rgba(255,255,255,0.08);
+  color: #fff;
+  border: 1px solid rgba(255,255,255,0.2);
+  border-radius: 8px;
+  padding: 4px 8px;
+}
+
+.bell {
+  background: none;
+  border: none;
+  font-size: 18px;
+  color: #fff;
+}
+
+/* 🔥 SearchBar 영역 */
+.search-wrapper {
+  margin-top: 14px;
+  display: flex;
+  justify-content: center;
+
+  transition: all 0.35s ease;
+}
+
+/* 🔥 스크롤 후 → 가운데로 쏙 */
+.header.scrolled .search-wrapper {
+  margin-top: 6px;          /* ⭐ 위 여백 확 줄임 */
+}

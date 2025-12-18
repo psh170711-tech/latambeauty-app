@@ -1,0 +1,36 @@
+.search-bar {
+  width: 100%;
+  max-width: 720px;   /* 🔥 스크롤 전 큼 */
+  transition: all 0.35s ease;
+}
+
+.header.scrolled .search-bar {
+  max-width: 720px;   /* 🔥 스크롤 후 반절 */
+}
+
+.search-inner {
+  position: relative;
+}
+
+.search-input {
+  width: 100%;
+  padding: 14px 44px 14px 18px;
+  border-radius: 999px;
+
+  background: rgba(255,255,255,0.06);
+  border: 1px solid rgba(255,255,255,0.14);
+  color: #fff;
+  font-size: 14px;
+}
+
+.search-btn {
+  position: absolute;
+  right: 14px;
+  top: 50%;
+  transform: translateY(-50%);
+  background: none;
+  border: none;
+  font-size: 18px;
+  color: #bbb;
+  cursor: pointer;
+}
