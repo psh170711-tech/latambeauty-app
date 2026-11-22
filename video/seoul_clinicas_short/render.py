@@ -1,6 +1,8 @@
 """Render the 'Clínicas en Seúl' YouTube Short (1080x1920, 30fps).
 
 Inputs : audio/1.wav .. audio/5.wav  (Spanish voiceover from prep_audio.py, one file per scene)
+         broll/*.jpg|png              (background photos, see broll/CREDITS.md)
+         music.py                     (synthesized backing track, rendered on the fly)
 Output : out/seoul_clinicas_short.mp4
 
 Usage  : python3 render.py <workdir>
@@ -10,7 +12,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageDraw, ImageFilter, ImageFont
 
 W, H, FPS = 1080, 1920, 30
 GAP = 0.35  # silence between scenes (s)
@@ -115,18 +117,139 @@ def prog(now, t0, d=0.35):
     return clamp((now - t0) / d)
 
 
-def make_bg():
-    img = Image.new("RGB", (W, H))
-    px = img.load()
+BROLL = WORK / "broll"
+ZOOM = 1.14  # Ken Burns headroom
+
+
+def _cover(path, blur=0):
+    im = Image.open(path).convert("RGB")
+    sc = max(W * ZOOM / im.width, H * ZOOM / im.height)
+    im = im.resize((int(im.width * sc + 1), int(im.height * sc + 1)), Image.LANCZOS)
+    if blur:
+        im = im.filter(ImageFilter.GaussianBlur(blur))
+    return im
+
+
+_img_cache = {}
+
+
+def photo(name, blur=0):
+    key = (name, blur)
+    if key not in _img_cache:
+        _img_cache[key] = _cover(BROLL / name, blur) if name != "_phone" else phone_shot()
+    return _img_cache[key]
+
+
+def kenburns(im, k, mode):
+    """k in 0..1 across the shot; mode = (zoom_from, zoom_to, pan_x, pan_y)."""
+    z0, z1, px_, py_ = mode
+    z = z0 + (z1 - z0) * k
+    cw, ch = W * ZOOM / z, H * ZOOM / z
+    cw, ch = min(cw, im.width), min(ch, im.height)
+    cx = im.width / 2 + px_ * (k - 0.5) * (im.width - cw)
+    cy = im.height / 2 + py_ * (k - 0.5) * (im.height - ch)
+    box = (cx - cw / 2, cy - ch / 2, cx + cw / 2, cy + ch / 2)
+    return im.resize((W, H), Image.BILINEAR, box=box)
+
+
+def _grad_overlay():
+    """Darken top and bottom for text legibility."""
+    g = Image.new("L", (1, H))
     for y in range(H):
         k = y / H
-        row = tuple(int(BG1[j] * (1 - k) + BG2[j] * k) for j in range(3))
-        for x in range(W):
-            px[x, y] = row
+        top = max(0, 1 - k / 0.35) * 150
+        bot = max(0, (k - 0.55) / 0.45) * 215
+        g.putpixel((0, y), int(min(235, 70 + top + bot)))
+    g = g.resize((W, H))
+    ov = Image.new("RGBA", (W, H), (8, 6, 18, 0))
+    ov.putalpha(g)
+    return ov
+
+
+GRAD = _grad_overlay()
+
+
+def phone_shot():
+    """Graphic for tip 3: a phone showing photo reviews, over a blurred cafe-ish backdrop."""
+    bg = _cover(BROLL / "myeongdong.jpg", blur=28)
+    im = bg.convert("RGBA")
+    d = ImageDraw.Draw(im)
+    ox, oy = (im.width - 620) // 2, (im.height - 1180) // 2 - 60
+    d.rounded_rectangle((ox, oy, ox + 620, oy + 1180), 80, fill=(15, 15, 20))
+    d.rounded_rectangle((ox + 22, oy + 22, ox + 598, oy + 1158), 62, fill=(245, 243, 248))
+    d.rounded_rectangle((ox + 250, oy + 40, ox + 370, oy + 66), 13, fill=(15, 15, 20))
+    srcs = ["ai_consulta.png", "ai_fabrica.png", "ai_pago.png", "gangnam_daero.jpg"]
+    for k in range(4):
+        y = oy + 110 + k * 260
+        d.ellipse((ox + 50, y, ox + 110, y + 60), fill=(220, 200, 230))
+        d.rounded_rectangle((ox + 125, y + 8, ox + 330, y + 26), 9, fill=(200, 196, 210))
+        for st in range(5):
+            d.polygon([(ox + 130 + st * 30 + dx, y + 40 + dy) for dx, dy in
+                       [(10, 0), (13, 8), (21, 8), (15, 13), (17, 21), (10, 16), (3, 21), (5, 13), (-1, 8), (7, 8)]],
+                      fill=YELLOW)
+        th = Image.open(BROLL / srcs[k]).convert("RGB")
+        th = th.resize((180, int(180 * th.height / th.width))).crop((0, 0, 180, 150))
+        th = th.filter(ImageFilter.GaussianBlur(2))
+        im.paste(th, (ox + 380, y))
+        d.rounded_rectangle((ox + 50, y + 90, ox + 360, y + 106), 8, fill=(215, 212, 225))
+        d.rounded_rectangle((ox + 50, y + 120, ox + 300, y + 136), 8, fill=(215, 212, 225))
+        d.line((ox + 50, y + 225, ox + 570, y + 225), fill=(225, 222, 232), width=2)
+    return im.convert("RGB")
+
+
+# shot list: (scene, chunk, offset_s, image, kenburns mode)
+SHOTS = [
+    (0, 0, 0.0, "seoul_night.jpg", (1.0, 1.10, 0.0, 0.6)),
+    (0, 2, 0.0, "seoul_night.jpg", (1.18, 1.26, 0.0, 0.4)),          # punch-in on "Espera."
+    (1, 0, 0.0, "gangnam_daero.jpg", (1.0, 1.10, 0.0, -0.5)),
+    (1, 2, 0.0, "garosugil.jpg", (1.0, 1.12, 0.8, 0.0)),
+    (1, 2, 0.8, "apgujeong_rodeo.jpg", (1.05, 1.15, -0.8, 0.0)),
+    (1, 3, 0.0, "gangnam_station.jpg", (1.0, 1.10, 0.0, 0.5)),
+    (1, 4, 0.0, "myeongdong.jpg", (1.0, 1.12, 0.0, 0.6)),
+    (2, 0, 0.0, "ai_fabrica.png", (1.0, 1.14, 0.0, 0.8)),
+    (3, 0, 0.0, "ai_consulta.png", (1.0, 1.12, 0.5, 0.0)),
+    (3, 3, 0.0, "ai_pago.png", (1.0, 1.12, -0.5, 0.3)),
+    (3, 6, 0.0, "_phone", (1.0, 1.10, 0.0, -0.4)),
+    (4, 0, 0.0, "seoul_night.jpg|blur", (1.05, 1.12, 0.0, 0.0)),
+]
+XF = 0.25  # crossfade (s)
+
+
+def shot_times():
+    out = []
+    for k, (si, ci, off, name, mode) in enumerate(SHOTS):
+        t0 = chunk_t(si, ci) + off - (0.05 if ci == 0 else 0)
+        out.append([t0, name, mode])
+    for k in range(len(out)):
+        out[k].append(out[k + 1][0] if k + 1 < len(out) else TOTAL)
+    out[0][0] = 0.0
+    return out
+
+
+SHOT_T = None
+
+
+def background(now):
+    global SHOT_T
+    if SHOT_T is None:
+        SHOT_T = shot_times()
+
+    def render(sh):
+        t0, name, mode, t1 = sh
+        nm, blur = (name.split("|")[0], 30) if "|blur" in name else (name, 0)
+        k = clamp((now - t0) / max(0.1, t1 - t0 + XF))
+        return kenburns(photo(nm, blur), k, mode)
+
+    cur = max(i for i, sh in enumerate(SHOT_T) if sh[0] <= now)
+    img = render(SHOT_T[cur])
+    if cur > 0 and now - SHOT_T[cur][0] < XF:
+        prev = render(SHOT_T[cur - 1])
+        hard = SHOT_T[cur][1] == SHOT_T[cur - 1][1]  # same photo -> hard cut (punch-in)
+        if not hard:
+            img = Image.blend(prev, img, (now - SHOT_T[cur][0]) / XF)
+    img = img.convert("RGBA")
+    img.alpha_composite(GRAD)
     return img
-
-
-BG = make_bg()
 
 
 def text_w(d, s, f):
@@ -224,53 +347,49 @@ def header(img, now, t0, label, color=CORAL):
 
 def scene1(img, now, sc):
     header(img, now, sc["start"], "SEÚL · CIRUGÍA ESTÉTICA")
-    draw_text_center(img, "¿Vienes a Seúl", font("Black", 96), 520, WHITE, prog(now, chunk_t(0, 0)))
-    draw_text_center(img, "para una cirugía?", font("Black", 96), 640, WHITE, prog(now, chunk_t(0, 1)))
+    draw_text_center(img, "¿Vienes a Seúl", font("Black", 96), 520, WHITE, prog(now, chunk_t(0, 0)), stroke=7, stroke_fill=(10, 8, 20))
+    draw_text_center(img, "para una cirugía?", font("Black", 96), 640, WHITE, prog(now, chunk_t(0, 1)), stroke=7, stroke_fill=(10, 8, 20))
     pe = prog(now, chunk_t(0, 2), 0.4)
     if pe > 0:
         wob = math.sin(now * 18) * 3 * (1 - pe)
-        draw_text_center(img, "ESPERA.", font("Black", 190), 820 + wob, YELLOW, pe, scale_pop=True)
+        draw_text_center(img, "ESPERA.", font("Black", 190), 820 + wob, YELLOW, pe, scale_pop=True, stroke=9, stroke_fill=(10, 8, 20))
     p4 = prog(now, chunk_t(0, 3))
     if p4 > 0:
-        draw_text_center(img, "Esto nadie te lo dice.", font("ExtraBold", 66), 1110, WHITE, p4)
+        draw_text_center(img, "Esto nadie te lo dice.", font("ExtraBold", 66), 1110, WHITE, p4, stroke=6, stroke_fill=(10, 8, 20))
         d = ImageDraw.Draw(img)
         lw = 700 * ease_out(prog(now, chunk_t(0, 3) + 0.2, 0.5))
         d.rounded_rectangle(((W - 700) / 2, 1215, (W - 700) / 2 + lw, 1229), 7, fill=CORAL)
 
 
+def loc_tag(img, now, t0, t1, cat, cat_col, name, sub=""):
+    """Big location label for the current shot (fades in at t0, out at t1)."""
+    p = prog(now, t0, 0.3) * clamp((t1 - now) / 0.2)
+    if p <= 0:
+        return
+    lay = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+    d = ImageDraw.Draw(lay)
+    fc, fn, fs = font("Black", 44), font("Black", 104), font("SemiBold", 46)
+    y = 470
+    cw = text_w(d, cat, fc)
+    d.rounded_rectangle((90, y, 90 + cw + 56, y + 74), 37, fill=cat_col + (255,))
+    d.text((118, y + 13), cat, font=fc, fill=BG1)
+    pin(d, 122, y + 150, 26, cat_col)
+    d.text((170, y + 100), name, font=fn, fill=WHITE, stroke_width=6, stroke_fill=(10, 8, 20))
+    if sub:
+        d.text((172, y + 225), sub, font=fs, fill=WHITE, stroke_width=4, stroke_fill=(10, 8, 20))
+    compose(img, lay, p, dy=0)
+
+
 def scene2(img, now, sc):
     header(img, now, sc["start"], "¿DÓNDE ESTÁN LAS CLÍNICAS?")
-    # card A: cirugía
-    pa = prog(now, chunk_t(1, 0), 0.4)
-    layer, d = card_layer((70, 380, W - 70, 900), 40, CARD + (255,), CORAL + (255,), 4)
-    d.text((120, 420), "CIRUGÍA", font=font("Black", 64), fill=CORAL)
-    d.text((120, 500), "Gangnam", font=font("SemiBold", 44), fill=SOFT)
-    compose(img, layer, pa)
-    rows = [("Sinsa", "Garosu-gil", chunk_t(1, 2)),
-            ("Apgujeong", "Rodeo", chunk_t(1, 2) + 0.55),
-            ("Estación Gangnam", "", chunk_t(1, 3) + 0.3)]
-    for k, (name, sub, t0) in enumerate(rows):
-        p = prog(now, t0, 0.35)
-        lay, ld = card_layer((0, 0, 1, 1), 0, (0, 0, 0, 0))
-        y = 600 + k * 95
-        pin(ld, 150, y + 18, 20, CORAL)
-        ld.text((200, y), name, font=font("ExtraBold", 54), fill=WHITE)
-        if sub:
-            nx = 200 + text_w(ld, name, font("ExtraBold", 54)) + 22
-            ld.text((nx, y + 14), sub, font=font("Medium", 38), fill=SOFT)
-        compose(img, lay, p, dy=0)
-    # card B: piel
-    pb = prog(now, chunk_t(1, 4), 0.4)
-    layer, d = card_layer((70, 950, W - 70, 1290), 40, CARD + (255,), YELLOW + (255,), 4)
-    d.text((120, 990), "PIEL / TRATAMIENTOS", font=font("Black", 56), fill=YELLOW)
-    compose(img, layer, pb)
-    for k, (name, t0) in enumerate([("Myeongdong", chunk_t(1, 6)), ("Cheongdam", chunk_t(1, 6) + 0.6)]):
-        p = prog(now, t0, 0.35)
-        lay, ld = card_layer((0, 0, 1, 1), 0, (0, 0, 0, 0))
-        y = 1090 + k * 95
-        pin(ld, 150, y + 18, 20, YELLOW)
-        ld.text((200, y), name, font=font("ExtraBold", 54), fill=WHITE)
-        compose(img, lay, p, dy=0)
+    c = lambda k: chunk_t(1, k)
+    end = sc["end"] + 0.3
+    loc_tag(img, now, c(0) + 0.3, c(2), "CIRUGÍA", CORAL, "Gangnam", "La zona de las clínicas")
+    loc_tag(img, now, c(2), c(2) + 0.8, "CIRUGÍA", CORAL, "Sinsa", "Garosu-gil")
+    loc_tag(img, now, c(2) + 0.8, c(3), "CIRUGÍA", CORAL, "Apgujeong", "Rodeo")
+    loc_tag(img, now, c(3), c(4), "CIRUGÍA", CORAL, "Gangnam", "Estación de Gangnam")
+    loc_tag(img, now, c(4), c(6), "PIEL", YELLOW, "Tratamientos", "de piel")
+    loc_tag(img, now, c(6), end, "PIEL", YELLOW, "Myeongdong", "y Cheongdam")
 
 
 def scene3(img, now, sc):
@@ -278,27 +397,27 @@ def scene3(img, now, sc):
     lay, ld = card_layer((0, 0, 1, 1), 0, (0, 0, 0, 0))
     warn_tri(ld, W // 2, 360, 80, RED)
     compose(img, lay, p0, dy=-20)
-    draw_text_center(img, "OJO", font("Black", 120), 470, RED, prog(now, chunk_t(2, 0)), scale_pop=True)
-    draw_text_center(img, "Clínicas «fábrica»", font("Black", 86), 650, WHITE, prog(now, chunk_t(2, 3)))
-    # crowd of patients filling in
-    t_crowd = chunk_t(2, 4)
-    n_total = 40
-    n = int(n_total * ease_out(prog(now, t_crowd, 1.4)))
-    if now >= t_crowd:
-        d = ImageDraw.Draw(img)
-        d.text((90, 815), "Pacientes por día", font=font("ExtraBold", 44), fill=SOFT)
-        for i in range(n):
-            r, c = divmod(i, 10)
-            person(d, 135 + c * 90, 935 + r * 85, 40, CORAL if i % 7 else YELLOW)
-    # shrinking doctor-time bar
+    draw_text_center(img, "OJO", font("Black", 130), 465, RED, prog(now, chunk_t(2, 0)), scale_pop=True,
+                     stroke=8, stroke_fill=(10, 8, 20))
+    draw_text_center(img, "Clínicas «fábrica»", font("Black", 92), 650, WHITE, prog(now, chunk_t(2, 3)),
+                     stroke=8, stroke_fill=(10, 8, 20))
+    pm = prog(now, chunk_t(2, 4), 0.3)
+    if pm > 0:
+        lay, ld = card_layer((0, 0, 1, 1), 0, (0, 0, 0, 0))
+        f = font("ExtraBold", 48)
+        lbl = "MUCHOS PACIENTES POR DÍA"
+        tw = text_w(ld, lbl, f)
+        ld.rounded_rectangle(((W - tw) / 2 - 36, 830, (W + tw) / 2 + 36, 910), 40, fill=RED + (235,))
+        ld.text(((W - tw) / 2, 843), lbl, font=f, fill=WHITE)
+        compose(img, lay, pm, dy=20)
     t_bar = chunk_t(2, 5)
     pb = prog(now, t_bar, 0.3)
     if pb > 0:
-        lay, ld = card_layer((0, 0, 1, 1), 0, (0, 0, 0, 0))
-        ld.text((90, 1270), "Tiempo con el médico", font=font("ExtraBold", 44), fill=SOFT)
-        ld.rounded_rectangle((90, 1340, W - 90, 1390), 25, fill=CARD)
+        lay, ld = card_layer((60, 1150, W - 60, 1330), 34, (14, 12, 28, 215))
+        ld.text((100, 1175), "Tiempo con el médico", font=font("ExtraBold", 46), fill=WHITE)
+        ld.rounded_rectangle((100, 1250, W - 100, 1300), 25, fill=(60, 56, 84))
         frac = 1 - 0.85 * ease_out(prog(now, t_bar + 0.3, 1.2))
-        ld.rounded_rectangle((90, 1340, 90 + (W - 180) * frac, 1390), 25, fill=RED)
+        ld.rounded_rectangle((100, 1250, 100 + (W - 200) * frac, 1300), 25, fill=RED)
         compose(img, lay, pb, dy=0)
 
 
@@ -308,22 +427,28 @@ def scene4(img, now, sc):
             ("2", "Nunca pagues el mismo día", "por presión.", chunk_t(3, 3)),
             ("3", "Reseñas con fotos reales,", "no solo en Instagram.", chunk_t(3, 6))]
     for k, (num, l1, l2, t0) in enumerate(tips):
-        p = prog(now, t0, 0.4)
+        t1 = tips[k + 1][3] if k < 2 else sc["end"] + 0.4
+        p = prog(now, t0, 0.35) * clamp((t1 - now) / 0.2)
         if p <= 0:
             continue
-        y = 390 + k * 300
-        active = (k == 2 or now < tips[k + 1][3]) if k < 2 else True
-        oc = GREEN if active else (90, 84, 120)
-        lay, ld = card_layer((70, y, W - 70, y + 260), 36, CARD + (255,), oc + (255,), 5 if active else 3)
-        ld.ellipse((105, y + 70, 225, y + 190), fill=oc)
+        y = 400
+        lay, ld = card_layer((60, y, W - 60, y + 250), 36, (14, 12, 28, 225), GREEN + (255,), 5)
+        ld.ellipse((95, y + 65, 215, y + 185), fill=GREEN)
         nf = font("Black", 76)
-        ld.text((165 - text_w(ld, num, nf) / 2, y + 82), num, font=nf, fill=BG1)
-        ld.text((255, y + 58), l1, font=font("ExtraBold", 50), fill=WHITE)
-        ld.text((255, y + 135), l2, font=font("SemiBold", 44), fill=SOFT)
-        compose(img, lay, p)
+        ld.text((155 - text_w(ld, num, nf) / 2, y + 77), num, font=nf, fill=BG1)
+        ld.text((245, y + 58), l1, font=font("ExtraBold", 50), fill=WHITE)
+        ld.text((245, y + 132), l2, font=font("SemiBold", 44), fill=SOFT)
+        # 1/2/3 dots
+        for j in range(3):
+            ld.ellipse((W / 2 - 60 + j * 50, y + 285, W / 2 - 40 + j * 50, y + 305),
+                       fill=GREEN if j == k else (255, 255, 255, 120))
+        compose(img, lay, p, dy=30)
 
 
 def scene5(img, now, sc):
+    pp = prog(now, sc["start"], 0.3)
+    lay, _ = card_layer((50, 290, W - 50, 1340), 48, (14, 12, 28, 170))
+    compose(img, lay, pp, dy=0)
     draw_text_center(img, "Comenta", font("Black", 110), 330, WHITE, prog(now, sc["start"]))
     p = prog(now, chunk_t(4, 0) + 0.2, 0.45)
     if p > 0:
@@ -349,7 +474,7 @@ def scene5(img, now, sc):
         compose(img, lay, pi)
         y += 66 * len(lines) + 40
     pf = prog(now, chunk_t(4, 4) + 0.3, 0.5)
-    draw_text_center(img, "Información general · No es consejo médico", font("Medium", 32), 1290, SOFT, pf)
+    draw_text_center(img, "Información general · No es consejo médico", font("Medium", 32), 1260, SOFT, pf)
 
 
 RENDER = [scene1, scene2, scene3, scene4, scene5]
@@ -376,7 +501,7 @@ def captions(img, now):
 
 def frame(i):
     now = i / FPS
-    img = BG.copy().convert("RGBA")
+    img = background(now)
     # active scene = last scene that started
     idx = 0
     for k, sc in enumerate(timeline):
@@ -398,17 +523,30 @@ def frame(i):
     return img.convert("RGB")
 
 
+MUSIC_VOL = 0.25  # backing track level (about 12 dB under the voice in pauses, ~15 dB under speech)
+
+
 def build_audio():
+    """Voice clips on the timeline + synthesized music, ducked under the voice."""
+    music = OUT / "music.wav"
+    mute = f"{chunk_t(0, 2) - 0.08:.2f}:{chunk_t(0, 3) + 0.05:.2f}"  # drop the beat on "Espera."
+    subprocess.run([sys.executable, str(Path(__file__).with_name("music.py")), str(music), f"{TOTAL:.2f}", mute],
+                   check=True)
     inputs, parts = [], []
     for k, sc in enumerate(timeline):
         inputs += ["-i", str(sc["wav"])]
         ms = int(sc["start"] * 1000)
-        parts.append(f"[{k}:a]aresample=48000,adelay={ms}|{ms}[a{k}]")
-    mix = "".join(f"[a{k}]" for k in range(len(timeline)))
-    fc = ";".join(parts) + f";{mix}amix=inputs={len(timeline)}:normalize=0,apad,atrim=0:{TOTAL:.3f},loudnorm=I=-14:TP=-1.5:LRA=11[out]"
-    wav = OUT / "voice_mix.wav"
-    subprocess.run(["ffmpeg", "-y", "-v", "error", *inputs, "-filter_complex", fc, "-map", "[out]",
-                    "-ar", "48000", "-ac", "2", str(wav)], check=True)
+        parts.append(f"[{k}:a]aresample=48000,aformat=channel_layouts=stereo,adelay={ms}|{ms}[a{k}]")
+    n = len(timeline)
+    mix = "".join(f"[a{k}]" for k in range(n))
+    fc = (";".join(parts)
+          + f";{mix}amix=inputs={n}:normalize=0,apad,atrim=0:{TOTAL:.3f},loudnorm=I=-14:TP=-2:LRA=11,aresample=48000,apad,atrim=0:{TOTAL:.3f},asplit[v1][v2]"
+          + f";[{n}:a]aresample=48000,volume={MUSIC_VOL}[m]"
+          + ";[m][v2]sidechaincompress=threshold=0.08:ratio=2.5:attack=20:release=350[md]"
+          + ";[v1][md]amix=inputs=2:normalize=0,alimiter=limit=0.89:level=false,apad[out]")
+    wav = OUT / "mix.wav"
+    subprocess.run(["ffmpeg", "-y", "-v", "error", *inputs, "-i", str(music), "-filter_complex", fc,
+                    "-map", "[out]", "-ar", "48000", "-ac", "2", "-t", f"{TOTAL:.3f}", str(wav)], check=True)
     return wav
 
 
@@ -422,7 +560,7 @@ def main():
     ff = subprocess.Popen(["ffmpeg", "-y", "-v", "error", "-f", "rawvideo", "-pix_fmt", "rgb24",
                            "-s", f"{W}x{H}", "-r", str(FPS), "-i", "-", "-i", str(wav),
                            "-c:v", "libx264", "-preset", "medium", "-crf", "18", "-pix_fmt", "yuv420p",
-                           "-c:a", "aac", "-b:a", "192k", "-shortest", "-movflags", "+faststart", str(out)],
+                           "-c:a", "aac", "-b:a", "192k", "-t", f"{NF / FPS:.3f}", "-movflags", "+faststart", str(out)],
                           stdin=subprocess.PIPE)
     for i in range(NF):
         ff.stdin.write(frame(i).tobytes())

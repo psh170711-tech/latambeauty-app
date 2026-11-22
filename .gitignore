@@ -22,3 +22,9 @@ build/
 *.env
 tmp/tar/
 tmp/tar/restore/
+
+# video build intermediates
+video/**/out/music.wav
+video/**/out/mix.wav
+video/**/out/voice_mix.wav
+video/**/out/still_*.png
